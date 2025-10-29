@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>B2C Payment Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input, select, textarea { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
+        textarea { resize: vertical; min-height: 60px; }
+        button { padding: 10px 20px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #218838; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        .messages { margin-top: 30px; padding: 15px; background: #f5f5f5; border-radius: 4px; max-height: 400px; overflow-y: auto; }
+        .message { padding: 10px; margin-bottom: 10px; border-radius: 4px; border-left: 4px solid #28a745; background: white; }
+        .message.success { border-left-color: #28a745; }
+        .message.error { border-left-color: #dc3545; }
+        .message.info { border-left-color: #17a2b8; }
+        .message.warning { border-left-color: #ffc107; }
+        .status { padding: 5px 10px; border-radius: 4px; font-size: 12px; display: inline-block; margin-left: 10px; }
+        .status.connected { background: #d4edda; color: #155724; }
+        .status.disconnected { background: #f8d7da; color: #721c24; }
+        h1 { color: #333; }
+        .timestamp { font-size: 12px; color: #666; margin-top: 5px; }
+        .help-text { font-size: 12px; color: #666; margin-top: 3px; }
+        .payment-details { background: #e7f3ff; padding: 10px; border-radius: 4px; margin-top: 10px; }
+        .payment-details strong { display: block; margin-bottom: 5px; }
+    </style>
+</head>
+<body>
+
+      <nav>
+        <ul>
+        <li><a href="/index.html">home</a></li>
+        <li><a href="stk.html">Stk push</a></li>
+        <li><a href="b2c.html">b2c</a></li>
+        </ul>
+    </nav>
+
+
+    <h1>B2C Payment Test <span id="wsStatus" class="status disconnected">Disconnected</span></h1>
+    
+    <form id="b2cForm">
+        <div class="form-group">
+            <label for="phoneNumber">Recipient Phone Number:</label>
+            <input type="text" id="phoneNumber" placeholder="254708374149 or 0708374149" required>
+            <div class="help-text">The phone number that will receive the payment</div>
+        </div>
+        
+        <div class="form-group">
+            <label for="amount">Amount (KES):</label>
+            <input type="number" id="amount" min="1" placeholder="100" required>
+        </div>
+        
+        <div class="form-group">
+            <label for="commandID">Payment Type:</label>
+            <select id="commandID" required>
+                <option value="BusinessPayment">Business Payment (Registered only)</option>
+                <option value="SalaryPayment">Salary Payment (Registered + Unregistered)</option>
+                <option value="PromotionPayment">Promotion Payment (Registered only)</option>
+            </select>
+            <div class="help-text">BusinessPayment: Normal B2C | SalaryPayment: Supports unregistered | PromotionPayment: Congratulatory message</div>
+        </div>
+        
+        <div class="form-group">
+            <label for="remarks">Remarks (max 100 chars):</label>
+            <textarea id="remarks" maxlength="100" placeholder="Payment for services rendered" required></textarea>
+        </div>
+        
+        <div class="form-group">
+            <label for="occasion">Occasion (optional, max 100 chars):</label>
+            <input type="text" id="occasion" maxlength="100" placeholder="e.g., Order #12345, Salary - October">
+        </div>
+        
+        <button type="submit" id="submitBtn">Send Payment</button>
+    </form>
+    
+    <div class="messages">
+        <h3>Payment Updates (Real-time via WebSocket)</h3>
+        <div id="messagesList"></div>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:8080';
+        const WS_URL = 'ws://localhost:8080/ws/payments';
+        
+        let ws;
+        const messagesList = document.getElementById('messagesList');
+        const wsStatus = document.getElementById('wsStatus');
+        const submitBtn = document.getElementById('submitBtn');
+        
+        // Connect to WebSocket
+        function connectWebSocket() {
+            ws = new WebSocket(WS_URL);
+            
+            ws.onopen = () => {
+                console.log('WebSocket connected');
+                wsStatus.textContent = 'Connected';
+                wsStatus.className = 'status connected';
+                addMessage('WebSocket connection established', 'info');
+            };
+            
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    console.log('WebSocket message:', data);
+                    
+                    if (data.type === 'b2c_initiated') {
+                        handleB2CInitiated(data);
+                    } else if (data.type === 'b2c_callback') {
+                        handleB2CCallback(data);
+                    } else if (data.type === 'b2c_timeout') {
+                        handleB2CTimeout(data);
+                    }
+                } catch (e) {
+                    console.error('Error parsing WebSocket message:', e);
+                }
+            };
+            
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                addMessage('WebSocket error occurred', 'error');
+            };
+            
+            ws.onclose = () => {
+                console.log('WebSocket disconnected');
+                wsStatus.textContent = 'Disconnected';
+                wsStatus.className = 'status disconnected';
+                addMessage('WebSocket connection closed. Reconnecting...', 'error');
+                
+                // Reconnect after 3 seconds
+                setTimeout(connectWebSocket, 3000);
+            };
+        }
+        
+        // Handle B2C payment initiated
+        function handleB2CInitiated(data) {
+            addMessage(
+                `<strong>Payment Initiated</strong><br>` +
+                `Conversation ID: ${data.conversation_id}<br>` +
+                `Phone: ${data.phone_number}<br>` +
+                `Amount: KES ${data.amount}<br>` +
+                `Type: ${data.command_id}<br>` +
+                `Waiting for M-Pesa to process...`,
+                'info'
+            );
+        }
+        
+        // Handle B2C callback from WebSocket
+        function handleB2CCallback(data) {
+            if (data.result_code === 0) {
+                // Success
+                let details = '<strong>Payment Successful! 🎉</strong><br>';
+                details += `Transaction ID: ${data.transaction_id}<br>`;
+                details += `Conversation ID: ${data.conversation_id}<br>`;
+                
+                // Parse result parameters
+                if (data.result_parameters && data.result_parameters.ResultParameter) {
+                    const params = data.result_parameters.ResultParameter;
+                    details += '<div class="payment-details"><strong>Payment Details:</strong>';
+                    
+                    params.forEach(param => {
+                        if (param.Key === 'TransactionAmount') {
+                            details += `Amount: KES ${param.Value}<br>`;
+                        } else if (param.Key === 'TransactionReceipt') {
+                            details += `Receipt: ${param.Value}<br>`;
+                        } else if (param.Key === 'ReceiverPartyPublicName') {
+                            details += `Recipient: ${param.Value}<br>`;
+                        } else if (param.Key === 'TransactionCompletedDateTime') {
+                            details += `Completed: ${param.Value}<br>`;
+                        } else if (param.Key === 'B2CRecipientIsRegisteredCustomer') {
+                            details += `Registered Customer: ${param.Value === 'Y' ? 'Yes' : 'No'}<br>`;
+                        } else if (param.Key === 'B2CWorkingAccountAvailableFunds') {
+                            details += `Available Balance: KES ${param.Value}<br>`;
+                        }
+                    });
+                    
+                    details += '</div>';
+                }
+                
+                addMessage(details, 'success');
+            } else {
+                // Failed
+                addMessage(
+                    `<strong>Payment Failed ❌</strong><br>` +
+                    `Error Code: ${data.result_code}<br>` +
+                    `Description: ${data.result_desc}<br>` +
+                    `Transaction ID: ${data.transaction_id || 'N/A'}`,
+                    'error'
+                );
+            }
+        }
+        
+        // Handle B2C timeout
+        function handleB2CTimeout(data) {
+            addMessage(
+                `<strong>Payment Timeout ⏱️</strong><br>` +
+                `Conversation ID: ${data.conversation_id}<br>` +
+                `${data.result_desc}<br>` +
+                `The payment request timed out while waiting in queue.`,
+                'warning'
+            );
+        }
+        
+        // Add message to display
+        function addMessage(text, type = 'info') {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+            messageDiv.innerHTML = text;
+            
+            const timestamp = document.createElement('div');
+            timestamp.className = 'timestamp';
+            timestamp.textContent = new Date().toLocaleString();
+            messageDiv.appendChild(timestamp);
+            
+            messagesList.insertBefore(messageDiv, messagesList.firstChild);
+        }
+        
+        // Handle form submission
+        document.getElementById('b2cForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const phoneNumber = document.getElementById('phoneNumber').value;
+            const amount = parseInt(document.getElementById('amount').value);
+            const commandID = document.getElementById('commandID').value;
+            const remarks = document.getElementById('remarks').value;
+            const occasion = document.getElementById('occasion').value;
+            
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Processing...';
+            
+            try {
+                const response = await fetch(`${API_URL}/api/v1/b2c/payment`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        phone_number: phoneNumber,
+                        amount: amount,
+                        command_id: commandID,
+                        remarks: remarks,
+                        occasion: occasion || undefined
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    addMessage(
+                        `<strong>Payment Request Accepted!</strong><br>` +
+                        `Conversation ID: ${data.data.conversation_id}<br>` +
+                        `Originator ID: ${data.data.originator_conversation_id}<br>` +
+                        `Response: ${data.data.response_description}<br>` +
+                        `The payment is being processed. You'll receive updates below.`,
+                        'success'
+                    );
+                } else {
+                    addMessage(
+                        `<strong>Request Failed</strong><br>` +
+                        `${data.error || 'Unknown error'}<br>` +
+                        `${data.details ? JSON.stringify(data.details) : ''}`,
+                        'error'
+                    );
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                addMessage(`<strong>Network Error</strong><br>${error.message}`, 'error');
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Send Payment';
+            }
+        });
+        
+        // Initialize WebSocket connection
+        connectWebSocket();
+        
+        // Add initial message
+        addMessage('Ready to send B2C payments. Fill the form and click "Send Payment".', 'info');
+    </script>
+</body>
+</html>

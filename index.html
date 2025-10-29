@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<body>
+
+  <nav>
+    <ul>
+      <li><a href="/index.html">home</a></li>
+      <li><a href="stk.html">Stk push</a></li>
+      <li><a href="b2c.html">b2c</a></li>
+    </ul>
+  </nav>
+
+    <div id="messages"></div>
+<script>
+const ws = new WebSocket('ws://localhost:8000/ws/payments');
+ws.onmessage = (event) => {
+  const div = document.createElement('div');
+  div.textContent = event.data;
+  document.getElementById('messages').appendChild(div);
+};
+</script>
+</body>
+</html>

@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STK Push Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
+        button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        .messages { margin-top: 30px; padding: 15px; background: #f5f5f5; border-radius: 4px; max-height: 400px; overflow-y: auto; }
+        .message { padding: 10px; margin-bottom: 10px; border-radius: 4px; border-left: 4px solid #007bff; background: white; }
+        .message.success { border-left-color: #28a745; }
+        .message.error { border-left-color: #dc3545; }
+        .message.info { border-left-color: #17a2b8; }
+        .status { padding: 5px 10px; border-radius: 4px; font-size: 12px; display: inline-block; margin-left: 10px; }
+        .status.connected { background: #d4edda; color: #155724; }
+        .status.disconnected { background: #f8d7da; color: #721c24; }
+        h1 { color: #333; }
+        .timestamp { font-size: 12px; color: #666; margin-top: 5px; }
+    </style>
+</head>
+<body>
+      <nav>
+        <ul>
+        <li><a href="/index.html">home</a></li>
+        <li><a href="stk.html">Stk push</a></li>
+        <li><a href="b2c.html">b2c</a></li>
+        </ul>
+    </nav>
+    <h1>STK Push Payment Test <span id="wsStatus" class="status disconnected">Disconnected</span></h1>
+    
+    <form id="stkForm">
+        <div class="form-group">
+            <label for="phoneNumber">Phone Number:</label>
+            <input type="text" id="phoneNumber" placeholder="254708374149 or 0708374149" required>
+        </div>
+        
+        <div class="form-group">
+            <label for="amount">Amount (KES):</label>
+            <input type="number" id="amount" min="1" placeholder="100" required>
+        </div>
+        
+        <div class="form-group">
+            <label for="accountReference">Account Reference (max 12 chars):</label>
+            <input type="text" id="accountReference" maxlength="12" placeholder="ORDER123" required>
+        </div>
+        
+        <div class="form-group">
+            <label for="transactionDesc">Transaction Description (max 13 chars):</label>
+            <input type="text" id="transactionDesc" maxlength="13" placeholder="Payment" required>
+        </div>
+        
+        <button type="submit" id="submitBtn">Initiate Payment</button>
+    </form>
+    
+    <div class="messages">
+        <h3>Payment Updates (Real-time via WebSocket)</h3>
+        <div id="messagesList"></div>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:8080';
+        const WS_URL = 'ws://localhost:8080/ws/payments';
+        
+        let ws;
+        const messagesList = document.getElementById('messagesList');
+        const wsStatus = document.getElementById('wsStatus');
+        const submitBtn = document.getElementById('submitBtn');
+        
+        // Connect to WebSocket
+        function connectWebSocket() {
+            ws = new WebSocket(WS_URL);
+            
+            ws.onopen = () => {
+                console.log('WebSocket connected');
+                wsStatus.textContent = 'Connected';
+                wsStatus.className = 'status connected';
+                addMessage('WebSocket connection established', 'info');
+            };
+            
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    console.log('WebSocket message:', data);
+                    
+                    if (data.type === 'stk_callback') {
+                        handleSTKCallback(data.data);
+                    }
+                } catch (e) {
+                    console.error('Error parsing WebSocket message:', e);
+                }
+            };
+            
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                addMessage('WebSocket error occurred', 'error');
+            };
+            
+            ws.onclose = () => {
+                console.log('WebSocket disconnected');
+                wsStatus.textContent = 'Disconnected';
+                wsStatus.className = 'status disconnected';
+                addMessage('WebSocket connection closed. Reconnecting...', 'error');
+                
+                // Reconnect after 3 seconds
+                setTimeout(connectWebSocket, 3000);
+            };
+        }
+        
+        // Handle STK callback from WebSocket
+        function handleSTKCallback(callback) {
+            if (callback.ResultCode === 0) {
+                const metadata = callback.CallbackMetadata?.Item || [];
+                let details = '<strong>Payment Successful!</strong><br>';
+                details += `Checkout Request ID: ${callback.CheckoutRequestID}<br>`;
+                
+                metadata.forEach(item => {
+                    if (item.Name === 'Amount') {
+                        details += `Amount: KES ${item.Value}<br>`;
+                    } else if (item.Name === 'MpesaReceiptNumber') {
+                        details += `Receipt: ${item.Value}<br>`;
+                    } else if (item.Name === 'PhoneNumber') {
+                        details += `Phone: ${item.Value}<br>`;
+                    }
+                });
+                
+                addMessage(details, 'success');
+            } else {
+                addMessage(`<strong>Payment Failed</strong><br>${callback.ResultDesc}`, 'error');
+            }
+        }
+        
+        // Add message to display
+        function addMessage(text, type = 'info') {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+            messageDiv.innerHTML = text;
+            
+            const timestamp = document.createElement('div');
+            timestamp.className = 'timestamp';
+            timestamp.textContent = new Date().toLocaleString();
+            messageDiv.appendChild(timestamp);
+            
+            messagesList.insertBefore(messageDiv, messagesList.firstChild);
+        }
+        
+        // Handle form submission
+        document.getElementById('stkForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const phoneNumber = document.getElementById('phoneNumber').value;
+            const amount = parseInt(document.getElementById('amount').value);
+            const accountReference = document.getElementById('accountReference').value;
+            const transactionDesc = document.getElementById('transactionDesc').value;
+            
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Processing...';
+
+            console.log('phone number: ', phoneNumber)
+            console.log('amount: ',amount)
+            console.log('account ref: ',accountReference)
+            console.log('transaction desc: ',transactionDesc)
+            
+            try {
+                const response = await fetch(`${API_URL}/api/v1/stk/initiate`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        phone_number: phoneNumber,
+                        amount: amount,
+                        account_reference: accountReference,
+                        transaction_desc: transactionDesc
+                    })
+                });
+                
+                const data = await response.json();
+
+                console.log('data: ',data)
+                
+                if (response.ok) {
+                    addMessage(
+                        `<strong>Payment Request Sent!</strong><br>` +
+                        `Checkout Request ID: ${data.CheckoutRequestID}<br>` +
+                        `${data.CustomerMessage}<br>` +
+                        `Please check your phone for the M-Pesa prompt.`,
+                        'success'
+                    );
+                } else {
+                    addMessage(
+                        `<strong>Request Failed</strong><br>` +
+                        `${data.error || data.ResponseDescription || 'Unknown error'}`,
+                        'error'
+                    );
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                addMessage(`<strong>Network Error</strong><br>${error.message}`, 'error');
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Initiate Payment';
+            }
+        });
+        
+        // Initialize WebSocket connection
+        connectWebSocket();
+        
+        // Add initial message
+        addMessage('Ready to process payments. Fill the form and click "Initiate Payment".', 'info');
+    </script>
+</body>
+</html>
