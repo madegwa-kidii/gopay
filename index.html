@@ -12,7 +12,7 @@
 
     <div id="messages"></div>
 <script>
-const ws = new WebSocket('ws://localhost:8000/ws/payments');
+const ws = new WebSocket('ws://gobackend.fly.dev/ws/payments');
 ws.onmessage = (event) => {
   const div = document.createElement('div');
   div.textContent = event.data;
